@@ -311,7 +311,11 @@ def run_daily_collection(
     }
 
     # --- 1. Yandex Search API (позиции) ---
-    if cfg.yandex_cloud and cfg.yandex_folder:
+    # Search API v2 требует Yandex Cloud Service Account с правом search-api:invoke.
+    # AI Studio API-ключ (AQVN...) сюда НЕ подходит — нужна отдельная сущность.
+    # Если cfg.yandex_cloud выглядит как AI Studio ключ — пропускаем Search API молча.
+    is_cloud_sa = cfg.yandex_cloud and not cfg.yandex_cloud.startswith("AQVN")
+    if is_cloud_sa and cfg.yandex_folder:
         for region_name, region_id in [
             ("moscow", cfg.yandex_regions.search_moscow),
             ("spb", cfg.yandex_regions.search_spb),
@@ -342,6 +346,8 @@ def run_daily_collection(
             except Exception as e:
                 logger.error(f"Search API error ({region_name}): {e}")
                 collected["errors"].append(f"search_api_{region_name}: {e}")
+    else:
+        logger.info("Search API skipped: AI Studio key detected (need Cloud Service Account for Search API)")
 
     # --- 2. Yandex Webmaster (показы, клики) ---
     if cfg.yandex_oauth and cfg.yandex_host:
