@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Кэшируем pip
 COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+RUN pip install --no-cache-dir --target=/deps -r requirements.txt
 
 # Pre-create creds dir in build stage (distroless has no shell)
 RUN mkdir -p /creds && chmod 755 /creds
@@ -22,12 +22,13 @@ ENV TZ=Europe/Moscow
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Tell Python where to find the third-party packages we built
+ENV PYTHONPATH=/deps
+
 WORKDIR /app
 
-# copy installed packages
-COPY --from=build /install /usr/local
-
-# copy app code
+# copy installed packages and app code
+COPY --from=build /deps /deps
 COPY config.py .
 COPY db.py .
 COPY yandex_api.py .
