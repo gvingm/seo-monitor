@@ -277,33 +277,58 @@ async def config_status():
 @app.post("/api/seed-demo")
 async def seed_demo():
     """Сидирует несколько демо-записей, чтобы дашборд ожил."""
-    from db import Position
+    from db import Keyword, Position
+    import random
     db_gen = get_db()
     db = next(db_gen)
     try:
         today = date.today()
-        # Берём первые 5 ключевых слов и создаём позиции за 7 дней
+        # Создаём/находим ключевые слова (Keyword + region — уникальны)
+        kw_ids = {}
+        for kw in config.SEO_KEYWORDS[:5]:
+            for region in ("moscow", "spb"):
+                existing = db.query(Keyword).filter_by(keyword=kw, region=region).first()
+                if existing:
+                    kw_ids[(kw, region)] = existing.id
+                    continue
+                k = Keyword(
+                    keyword=kw,
+                    region=region,
+                    source="yandex",
+                    is_active=1,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+                db.add(k)
+                db.flush()
+                kw_ids[(kw, region)] = k.id
+        db.commit()
+
+        # Позиции за 7 дней
+        rows = 0
         for kw in config.SEO_KEYWORDS[:5]:
             for d_offset in range(7):
                 d = today - timedelta(days=d_offset)
-                # Псевдо-случайные позиции: топ-50
-                import random
-                random.seed(hash((kw, d.isoformat())))
+                random.seed(hash((kw, d_offset)))
                 pos_moscow = random.randint(3, 45)
                 pos_spb = random.randint(5, 50)
                 for region, pos in [("moscow", pos_moscow), ("spb", pos_spb)]:
                     p = Position(
+                        keyword_id=kw_ids[(kw, region)],
                         date=d,
-                        keyword=kw,
+                        position=float(pos),
+                        impressions=random.randint(50, 500),
+                        clicks=random.randint(0, 30),
+                        ctr=round(random.uniform(0.02, 0.15), 4),
+                        source="yandex",
                         region=region,
-                        search_engine="yandex",
-                        position=pos,
-                        url="https://didalsk.ru/" + (kw.replace(" ", "-")[:30]),
-                        collected_at=datetime.now(timezone.utc),
+                        url="https://didalsk.ru/" + kw.replace(" ", "-")[:30],
+                        created_at=datetime.now(timezone.utc),
                     )
                     db.add(p)
+                    rows += 1
         db.commit()
-        return {"status": "ok", "rows_added": 5 * 7 * 2}
+        return {"status": "ok", "rows_added": rows, "keywords": len(kw_ids)}
     finally:
         db.close()
 
