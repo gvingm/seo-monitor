@@ -283,25 +283,24 @@ async def seed_demo():
     db = next(db_gen)
     try:
         today = date.today()
-        # Создаём/находим ключевые слова (Keyword + region — уникальны)
+        # Создаём/находим ключевые слова (один keyword — для обоих регионов)
         kw_ids = {}
         for kw in config.SEO_KEYWORDS[:5]:
-            for region in ("moscow", "spb"):
-                existing = db.query(Keyword).filter_by(keyword=kw, region=region).first()
-                if existing:
-                    kw_ids[(kw, region)] = existing.id
-                    continue
-                k = Keyword(
-                    keyword=kw,
-                    region=region,
-                    source="yandex",
-                    is_active=1,
-                    created_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-                db.add(k)
-                db.flush()
-                kw_ids[(kw, region)] = k.id
+            existing = db.query(Keyword).filter_by(keyword=kw).first()
+            if existing:
+                kw_ids[kw] = existing.id
+                continue
+            k = Keyword(
+                keyword=kw,
+                region="all",
+                source="yandex",
+                is_active=1,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(k)
+            db.flush()
+            kw_ids[kw] = k.id
         db.commit()
 
         # Позиции за 7 дней
@@ -314,7 +313,7 @@ async def seed_demo():
                 pos_spb = random.randint(5, 50)
                 for region, pos in [("moscow", pos_moscow), ("spb", pos_spb)]:
                     p = Position(
-                        keyword_id=kw_ids[(kw, region)],
+                        keyword_id=kw_ids[kw],
                         date=d,
                         position=float(pos),
                         impressions=random.randint(50, 500),
