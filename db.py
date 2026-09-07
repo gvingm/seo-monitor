@@ -115,12 +115,16 @@ class MonitorLog(Base):
 
 # ── CRUD helpers ───────────────────────────────────────────
 def get_or_create_keyword(db: Session, keyword: str, region: str, source: str = "yandex") -> int:
-    """Возвращает id keyword, создаёт если нет."""
+    """Возвращает id keyword, создаёт если нет.
+
+    Модель: один keyword = одна строка (unique на `keyword`).
+    Регион хранится в Position, а не в Keyword.
+    """
     row = db.execute(
         text("""
             INSERT INTO keywords (keyword, region, source, is_active)
             VALUES (:kw, :reg, :src, 1)
-            ON CONFLICT (keyword, region) DO UPDATE SET updated_at = NOW()
+            ON CONFLICT (keyword) DO UPDATE SET updated_at = NOW()
             RETURNING id
         """),
         {"kw": keyword, "reg": region, "src": source}
@@ -145,6 +149,10 @@ def ensure_keywords(db: Session, keywords: list[str], regions: list[str]) -> dic
     """
     Гарантирует наличие всех keywords в БД.
     Возвращает dict: (keyword, region) → keyword_id
+
+    Использует ON CONFLICT (keyword) — модель имеет UNIQUE только на keyword.
+    Region хранится в Position, поэтому (keyword, region) дубликаты допустимы
+    только на уровне Position.
     """
     result = {}
     for kw in keywords:
@@ -153,7 +161,7 @@ def ensure_keywords(db: Session, keywords: list[str], regions: list[str]) -> dic
                 text("""
                     INSERT INTO keywords (keyword, region, source, is_active)
                     VALUES (:kw, :reg, 'yandex', 1)
-                    ON CONFLICT (keyword, region) DO UPDATE
+                    ON CONFLICT (keyword) DO UPDATE
                         SET updated_at = NOW()
                     RETURNING id
                 """),
