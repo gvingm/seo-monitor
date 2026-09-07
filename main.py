@@ -401,6 +401,85 @@ async def positions_history(days: int = 7):
         db.close()
 
 
+# ── Markdown-отчёт для пересылки (Ларк / Телеграм) ──────────
+@app.get("/api/report.md", response_class=HTMLResponse)
+async def markdown_report(days: int = 7):
+    """Генерирует markdown-сводку: метрики, топ-дропы, алерты, история."""
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        report = build_monitor_report(db, days=days)
+        # Подтянем историю и алерты
+        from sqlalchemy import func
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        hist_rows = (db.query(Position, Keyword.keyword)
+                     .join(Keyword, Position.keyword_id == Keyword.id)
+                     .filter(Position.date >= since)
+                     .all())
+        grouped: dict = {}
+        for pos, kw_text in hist_rows:
+            grouped.setdefault((kw_text, pos.region), []).append(pos.position)
+        alerts = (db.query(Alert)
+                  .filter(Alert.is_resolved == 0)
+                  .order_by(Alert.created_at.desc())
+                  .limit(20)
+                  .all())
+
+        lines = [
+            f"# 🔍 SEO Monitor — didalsk.ru",
+            f"_Отчёт за {days} дней, {date.today().isoformat()}_",
+            "",
+            "## 📊 Средние позиции",
+        ]
+        avg = report.get("avg_positions") or {}
+        if avg:
+            for region, val in avg.items():
+                lines.append(f"- **{region}**: {val:.1f}")
+        else:
+            lines.append("- _нет данных_")
+
+        lines += ["", "## 🔻 Топ-дропы"]
+        drops = report.get("top_drops") or []
+        if drops:
+            for d in drops[:10]:
+                lines.append(
+                    f"- **{d.get('keyword','?')}** ({d.get('region','?')}): "
+                    f"с {d.get('best_pos',0):.0f} на {d.get('worst_pos',0):.0f} "
+                    f"(swing {d.get('swing',0):.0f})"
+                )
+        else:
+            lines.append("- _нет значимых колебаний_")
+
+        lines += ["", f"## 🚨 Активные алерты ({len(alerts)})"]
+        if alerts:
+            severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🔵"}
+            for a in alerts:
+                emoji = severity_emoji.get(a.severity, "⚪")
+                lines.append(f"- {emoji} **{a.alert_type}** — {a.message}")
+        else:
+            lines.append("- ✅ Всё стабильно")
+
+        lines += ["", f"## 📈 Сводка по {len(grouped)} ключам"]
+        for (kw, region), positions in sorted(grouped.items(), key=lambda x: x[0][0]):
+            if not positions:
+                continue
+            best = min(positions)
+            worst = max(positions)
+            avg_p = sum(positions) / len(positions)
+            lines.append(f"- **{kw}** ({region}): avg {avg_p:.1f}, лучшая {best:.0f}, худшая {worst:.0f}")
+
+        lines += [
+            "",
+            "---",
+            f"_Источник: http://159.194.226.89:8788/_",
+        ]
+        md = "\n".join(lines)
+        # Возвращаем как text/markdown
+        return HTMLResponse(content=md, media_type="text/markdown; charset=utf-8")
+    finally:
+        db.close()
+
+
 # ── HTML Dashboard ──────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
@@ -461,6 +540,7 @@ async def dashboard():
             <button class="btn" onclick="runCollection()">▶ Запустить сбор сейчас</button>
             <button class="btn" onclick="loadData()">↻ Обновить</button>
             <button class="btn" style="background:#7c3aed;" onclick="seedDemo()">🧪 Сид демо-данных</button>
+            <button class="btn" style="background:#10b981;" onclick="copyReport()">📄 Копировать отчёт</button>
         </div>
 
         <div class="card" style="margin-top: 24px;">
@@ -549,8 +629,24 @@ async def dashboard():
             async function seedDemo() {
                 const r = await fetch(API + '/api/seed-demo', {method:'POST'});
                 const data = await r.json();
-                alert('Добавлено ' + data.rows_added + ' демо-записей');
+                alert('Добавлено ' + data.rows_added + ' демо-записей, '
+                      + (data.alerts_added||0) + ' алертов');
                 loadData();
+                loadHistory();
+            }
+
+            async function copyReport() {
+                const r = await fetch(API + '/api/report.md');
+                const md = await r.text();
+                try {
+                    await navigator.clipboard.writeText(md);
+                    alert('Markdown-отчёт скопирован в буфер');
+                } catch (e) {
+                    // Fallback: показать в новом окне
+                    const w = window.open('', '_blank');
+                    w.document.write('<pre style="white-space:pre-wrap;font-family:monospace;padding:20px;">'
+                                     + md.replace(/</g, '&lt;') + '</pre>');
+                }
             }
 
             async function loadHistory() {
