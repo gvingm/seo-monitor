@@ -202,33 +202,102 @@ class YandexWebmasterClient:
     ) -> list[dict]:
         """
         Получает статистику по запросам (показы, клики, CTR, позиция).
-        region_id: 1=Москва, 10174=СПб
+
+        Endpoint: POST /v4/user/{user_id}/hosts/{host_id}/query-analytics/list
+        (без /int32 — это устаревший alias).
+
+        Response format v4:
+        {
+          "count": N,
+          "text_indicator_to_statistics": [
+            {
+              "text_indicator": {"type": "QUERY", "value": "..."},
+              "popular_complementary_indicator": {"type": "URL", "value": "/path"},
+              "statistics": [
+                {"date": "2026-09-01", "field": "IMPRESSIONS", "value": 22.0},
+                {"date": "2026-09-01", "field": "CLICKS", "value": 0.0},
+                {"date": "2026-09-01", "field": "CTR", "value": 0.0},
+                {"date": "2026-09-01", "field": "POSITION", "value": 12.5}
+              ]
+            }, ...
+          ]
+        }
+
+        region_id: 1=Москва, 10174=СПб (Webmaster — фильтр по региону).
         """
         if query_indicators is None:
-            query_indicators = ["TOTAL_ENTRIES_FIELD", "TOTAL_CLICKS_FIELD", "TOTAL_SHOWS_FIELD", "AVERAGE_POSITION_FIELD"]
+            query_indicators = [
+                "IMPRESSIONS",
+                "CLICKS",
+                "CTR",
+                "POSITION",
+            ]
 
-        url = f"{self._base()}/query-analytics/int32"
+        url = f"{self._base()}/query-analytics/list"
 
         payload = {
             "dateFrom": date_from.isoformat(),
             "dateTo": date_to.isoformat(),
-            "queriedFor": {
-                "query_indicators": query_indicators,
-            },
-            "region_id": region_id,
+            "query_indicators": query_indicators,
+            "region_id": str(region_id),
             "aggregationType": "day",
+            "limit": 5000,
         }
 
         try:
             resp = httpx.post(url, headers=self.headers, json=payload, timeout=60.0)
             if resp.status_code == 200:
-                return resp.json().get("queries", [])
+                raw = resp.json()
+                return self._flatten_query_analytics(raw)
             else:
                 logger.error(f"Webmaster API error {resp.status_code}: {resp.text[:300]}")
                 return []
         except Exception as e:
             logger.error(f"Webmaster API exception: {e}")
             return []
+
+    @staticmethod
+    def _flatten_query_analytics(raw: dict) -> list[dict]:
+        """Превращает вложенную структуру v4 в плоский список
+        [{query, url, date, shows, clicks, ctr, position}, ...]."""
+        result = []
+        items = raw.get("text_indicator_to_statistics", []) or []
+        for item in items:
+            ti = item.get("text_indicator", {}) or {}
+            query = ti.get("value", "")
+            if not query:
+                continue
+            pci = item.get("popular_complementary_indicator", {}) or {}
+            url_path = pci.get("value", "") if pci.get("type") == "URL" else ""
+            # statistics: list of {date, field, value}
+            stats = item.get("statistics", []) or []
+            by_date: dict[str, dict] = {}
+            for s in stats:
+                d = s.get("date")
+                f = (s.get("field") or "").upper()
+                v = s.get("value")
+                if not d:
+                    continue
+                rec = by_date.setdefault(d, {})
+                if f == "IMPRESSIONS":
+                    rec["shows"] = v
+                elif f == "CLICKS":
+                    rec["clicks"] = v
+                elif f == "CTR":
+                    rec["ctr"] = v
+                elif f == "POSITION":
+                    rec["position"] = v
+            for d, vals in by_date.items():
+                result.append({
+                    "query": query,
+                    "url": url_path,
+                    "date": d,
+                    "shows": vals.get("shows", 0) or 0,
+                    "clicks": vals.get("clicks", 0) or 0,
+                    "ctr": vals.get("ctr", 0.0) or 0.0,
+                    "position": vals.get("position"),
+                })
+        return result
 
     def get_pages_summary(
         self,
@@ -410,22 +479,25 @@ def run_daily_collection(
                     host_id=cfg.yandex_host,
                     user_id=cfg.yandex_user_id,
                 )
-                # Получаем данные за вчера и неделю
-                queries = client.get_query_analytics(yesterday, yesterday, region_id)
-                for q in queries:
-                    keyword = q.get("query_text") or q.get("query", "")
+                # За вчера (точечный сбор) + последние 7 дней (для графиков)
+                # Каждый день отдельной записью — нормализуем дату на начало суток UTC
+                rows = client.get_query_analytics(week_ago, yesterday, region_id)
+                for q in rows:
+                    keyword = q.get("query", "")
                     if not keyword:
                         continue
-                    # v4: индикаторы лежат в q["indicators"]
-                    indicators = q.get("indicators", {}) or {}
-                    shows = int(indicators.get("TOTAL_SHOWS_FIELD", 0) or 0)
-                    clicks = int(indicators.get("TOTAL_CLICKS_FIELD", 0) or 0)
-                    avg_pos = indicators.get("AVERAGE_POSITION_FIELD")
-                    ctr = (clicks / shows) if shows > 0 else 0.0
+                    try:
+                        qdate = datetime.strptime(q["date"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                    except Exception:
+                        continue
+                    shows = int(q.get("shows", 0) or 0)
+                    clicks = int(q.get("clicks", 0) or 0)
+                    avg_pos = q.get("position")
+                    ctr = float(q.get("ctr", 0.0) or 0.0)
                     kid = get_or_create_keyword(db, keyword, region_name, "webmaster")
                     pos = Position(
                         keyword_id=kid,
-                        date=datetime.combine(date_, datetime.min.time(), tzinfo=timezone.utc),
+                        date=qdate,
                         position=avg_pos,
                         impressions=shows,
                         clicks=clicks,
@@ -436,7 +508,7 @@ def run_daily_collection(
                     db.add(pos)
                     collected["webmaster"] += 1
                 db.commit()
-                logger.info(f"Webmaster: saved {len(queries)} queries for {region_name}")
+                logger.info(f"Webmaster: saved {len(rows)} rows for {region_name}")
             except Exception as e:
                 logger.error(f"Webmaster API error ({region_name}): {e}")
                 collected["errors"].append(f"webmaster_{region_name}: {e}")
