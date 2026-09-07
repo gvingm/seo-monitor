@@ -253,6 +253,61 @@ async def get_summary(days: int = 7):
         db.close()
 
 
+# ── Статус конфигурации (что настроено, что нет) ─────────────
+@app.get("/api/config-status")
+async def config_status():
+    """Возвращает карту: какие ключи API заполнены, какие нет."""
+    import os
+    return {
+        "yandex_oauth":        bool(config.YANDEX_OAUTH_TOKEN),
+        "yandex_cloud_token":  bool(config.YANDEX_CLOUD_TOKEN),
+        "yandex_folder_id":    bool(config.YANDEX_FOLDER_ID),
+        "yandex_host_id":      bool(config.YANDEX_HOST_ID),
+        "google_creds_file":   bool(config.GOOGLE_APPLICATION_CREDENTIALS
+                                    and os.path.exists(config.GOOGLE_APPLICATION_CREDENTIALS)),
+        "telegram_bot":        bool(config.TELEGRAM_BOT_TOKEN),
+        "telegram_chat":       bool(config.TELEGRAM_CHAT_ID),
+        "database":            bool(config.DATABASE_URL),
+        "app_secret":          bool(config.APP_SECRET_KEY and config.APP_SECRET_KEY != "ChangeMe"),
+        "keywords_loaded":     len(config.SEO_KEYWORDS),
+    }
+
+
+# ── Сид демо-данных (чтобы дашборд не висел пустым) ──────────
+@app.post("/api/seed-demo")
+async def seed_demo():
+    """Сидирует несколько демо-записей, чтобы дашборд ожил."""
+    from db import Position
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        today = date.today()
+        # Берём первые 5 ключевых слов и создаём позиции за 7 дней
+        for kw in config.SEO_KEYWORDS[:5]:
+            for d_offset in range(7):
+                d = today - timedelta(days=d_offset)
+                # Псевдо-случайные позиции: топ-50
+                import random
+                random.seed(hash((kw, d.isoformat())))
+                pos_moscow = random.randint(3, 45)
+                pos_spb = random.randint(5, 50)
+                for region, pos in [("moscow", pos_moscow), ("spb", pos_spb)]:
+                    p = Position(
+                        date=d,
+                        keyword=kw,
+                        region=region,
+                        search_engine="yandex",
+                        position=pos,
+                        url="https://didalsk.ru/" + (kw.replace(" ", "-")[:30]),
+                        collected_at=datetime.now(timezone.utc),
+                    )
+                    db.add(p)
+        db.commit()
+        return {"status": "ok", "rows_added": 5 * 7 * 2}
+    finally:
+        db.close()
+
+
 # ── HTML Dashboard ──────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
@@ -312,6 +367,12 @@ async def dashboard():
         <div style="margin-top: 24px;">
             <button class="btn" onclick="runCollection()">▶ Запустить сбор сейчас</button>
             <button class="btn" onclick="loadData()">↻ Обновить</button>
+            <button class="btn" style="background:#7c3aed;" onclick="seedDemo()">🧪 Сид демо-данных</button>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>Конфигурация (API)</h2>
+            <div id="config-status" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; font-size: 13px;"></div>
         </div>
 
         <div class="card" style="margin-top: 24px;">
@@ -374,8 +435,43 @@ async def dashboard():
                 loadData();
             }
 
+            async function seedDemo() {
+                const r = await fetch(API + '/api/seed-demo', {method:'POST'});
+                const data = await r.json();
+                alert('Добавлено ' + data.rows_added + ' демо-записей');
+                loadData();
+            }
+
+            async function loadConfig() {
+                const r = await fetch(API + '/api/config-status');
+                const s = await r.json();
+                const labels = {
+                    yandex_oauth:       'Yandex OAuth (Webmaster/Metrika)',
+                    yandex_cloud_token: 'Yandex Cloud Token (Search API)',
+                    yandex_folder_id:   'Yandex Folder ID',
+                    yandex_host_id:     'Yandex Host ID (Webmaster)',
+                    google_creds_file:  'Google service account (GSC)',
+                    telegram_bot:       'Telegram Bot Token',
+                    telegram_chat:      'Telegram Chat ID',
+                    database:           'PostgreSQL',
+                    app_secret:         'APP_SECRET_KEY',
+                    keywords_loaded:    'Ключевых слов загружено',
+                };
+                const el = document.getElementById('config-status');
+                el.innerHTML = Object.keys(labels).map(k => {
+                    let v = s[k];
+                    if (k === 'keywords_loaded') return '<div>📚 ' + labels[k] + ': <b>' + v + '</b></div>';
+                    const ok = !!v;
+                    const emoji = ok ? '✅' : '❌';
+                    const color = ok ? '#22c55e' : '#ef4444';
+                    return '<div style="color:' + color + ';">' + emoji + ' ' + labels[k] + '</div>';
+                }).join('');
+            }
+
             loadData();
+            loadConfig();
             setInterval(loadData, 300000); // 5 min
+            setInterval(loadConfig, 60000); // 1 min
         </script>
     </body>
     </html>
