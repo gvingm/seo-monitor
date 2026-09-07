@@ -1,0 +1,248 @@
+
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="utf-8">
+        <title>SEO Monitor — didalsk.ru</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; }
+            body { font-family: -apple-system, system-ui, sans-serif;
+                   background: #0f1117; color: #e5e7eb; padding: 24px; }
+            h1 { font-size: 24px; margin-bottom: 24px; color: #f9fafb; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+            .card { background: #1f2937; border-radius: 12px; padding: 20px; }
+            .card h2 { font-size: 14px; color: #9ca3af; text-transform: uppercase;
+                       letter-spacing: 0.05em; margin-bottom: 12px; }
+            .metric { font-size: 36px; font-weight: 700; color: #f9fafb; }
+            .metric-label { font-size: 13px; color: #6b7280; margin-top: 4px; }
+            .btn { display: inline-block; padding: 10px 20px; background: #3b82f6;
+                   color: white; border-radius: 8px; text-decoration: none;
+                   font-size: 14px; cursor: pointer; border: none; margin: 4px; }
+            .btn:hover { background: #2563eb; }
+            .status-ok { color: #22c55e; }
+            .status-err { color: #ef4444; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+            th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #374151; }
+            th { color: #9ca3af; font-size: 12px; text-transform: uppercase; }
+            tr:hover { background: #1f2937; }
+            .alert-critical { color: #ef4444; }
+            .alert-warning { color: #f59e0b; }
+            .alert-info { color: #3b82f6; }
+        </style>
+    </head>
+    <body>
+        <h1>🔍 SEO Monitor — didalsk.ru</h1>
+        <div class="grid">
+            <div class="card">
+                <h2>Статус</h2>
+                <div id="status" class="metric">...</div>
+            </div>
+            <div class="card">
+                <h2>Активных алертов</h2>
+                <div id="alerts-count" class="metric">—</div>
+            </div>
+            <div class="card">
+                <h2>Средняя позиция (Москва)</h2>
+                <div id="avg-moscow" class="metric">—</div>
+            </div>
+            <div class="card">
+                <h2>Средняя позиция (СПб)</h2>
+                <div id="avg-spb" class="metric">—</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 24px;">
+            <button class="btn" onclick="runCollection()">▶ Запустить сбор сейчас</button>
+            <button class="btn" onclick="loadData()">↻ Обновить</button>
+            <button class="btn" style="background:#7c3aed;" onclick="seedDemo()">🧪 Сид демо-данных</button>
+            <button class="btn" style="background:#10b981;" onclick="copyReport()">📄 Копировать отчёт</button>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>Конфигурация (API)</h2>
+            <div id="config-status" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; font-size: 13px;"></div>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>Активные алерты</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Тип</th>
+                        <th>Сообщение</th>
+                        <th>Дата</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="alerts-table"></tbody>
+            </table>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>История позиций по ключам (sparkline)</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ключ</th>
+                        <th>Регион</th>
+                        <th>Лучшая</th>
+                        <th>Худшая</th>
+                        <th>Средняя</th>
+                        <th>Δ за 7д</th>
+                        <th>Тренд</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table"></tbody>
+            </table>
+        </div>
+
+        <script>
+            const API = '';
+
+            async function loadData() {
+                const res = await fetch(API + '/api/summary');
+                const data = await res.json();
+                document.getElementById('status').textContent = 'Работает';
+                document.getElementById('status').className = 'metric status-ok';
+                document.getElementById('alerts-count').textContent = data.active_alerts_count || 0;
+                document.getElementById('avg-moscow').textContent =
+                    data.avg_positions?.moscow ? data.avg_positions.moscow.toFixed(1) : '—';
+                document.getElementById('avg-spb').textContent =
+                    data.avg_positions?.spb ? data.avg_positions.spb.toFixed(1) : '—';
+
+                // Alerts table
+                const alertsRes = await fetch(API + '/api/alerts');
+                const alerts = await alertsRes.json();
+                const tbody = document.getElementById('alerts-table');
+                tbody.innerHTML = alerts.map(a => `
+                    <tr>
+                        <td><span class="alert-${a.severity}">${a.alert_type}</span></td>
+                        <td>${a.message}</td>
+                        <td>${a.date ? a.date.slice(0,10) : '—'}</td>
+                        <td><button onclick="resolveAlert(${a.id})">✓</button></td>
+                    </tr>
+                `).join('');
+            }
+
+            async function runCollection() {
+                const btn = document.querySelector('.btn');
+                btn.textContent = '⏳ Сбор данных...';
+                btn.disabled = true;
+                const res = await fetch(API + '/api/collect', {method:'POST'});
+                const data = await res.json();
+                alert('Сбор завершён: ' + JSON.stringify(data, null, 2));
+                btn.textContent = '▶ Запустить сбор сейчас';
+                btn.disabled = false;
+                loadData();
+            }
+
+            async function resolveAlert(id) {
+                await fetch(API + '/api/alerts/' + id + '/resolve', {method:'POST'});
+                loadData();
+            }
+
+            async function seedDemo() {
+                const r = await fetch(API + '/api/seed-demo', {method:'POST'});
+                const data = await r.json();
+                alert('Добавлено ' + data.rows_added + ' демо-записей, '
+                      + (data.alerts_added||0) + ' алертов');
+                loadData();
+                loadHistory();
+            }
+
+            async function copyReport() {
+                const r = await fetch(API + '/api/report.md');
+                const md = await r.text();
+                try {
+                    await navigator.clipboard.writeText(md);
+                    alert('Markdown-отчёт скопирован в буфер');
+                } catch (e) {
+                    // Fallback: показать в новом окне
+                    const w = window.open('', '_blank');
+                    w.document.write('<pre style="white-space:pre-wrap;font-family:monospace;padding:20px;">'
+                                     + md.replace(/</g, '&lt;') + '</pre>');
+                }
+            }
+
+            async function loadHistory() {
+                const r = await fetch(API + '/api/positions-history?days=7');
+                const data = await r.json();
+                const tbody = document.getElementById('history-table');
+                tbody.innerHTML = data.items.map(row => {
+                    // Inline SVG sparkline
+                    const series = row.series || [];
+                    const w = 120, h = 30, pad = 2;
+                    const xs = series.length;
+                    const positions = series.map(p => p.position).filter(p => p != null);
+                    if (positions.length < 2) {
+                        return `<tr>
+                            <td>${row.keyword}</td>
+                            <td>${row.region}</td>
+                            <td>${row.best ?? '—'}</td>
+                            <td>${row.worst ?? '—'}</td>
+                            <td>${row.avg ?? '—'}</td>
+                            <td>${row.delta > 0 ? '+' : ''}${row.delta}</td>
+                            <td><svg width="${w}" height="${h}"><text x="5" y="20" fill="#6b7280" font-size="10">нет данных</text></svg></td>
+                        </tr>`;
+                    }
+                    const minP = Math.min(...positions);
+                    const maxP = Math.max(...positions);
+                    const range = Math.max(maxP - minP, 1);
+                    const points = series.map((p, i) => {
+                        const x = pad + (i / Math.max(xs - 1, 1)) * (w - 2 * pad);
+                        const y = pad + (1 - (p.position - minP) / range) * (h - 2 * pad);
+                        return `${x.toFixed(1)},${y.toFixed(1)}`;
+                    }).join(' ');
+                    const lastY = pad + (1 - (positions[positions.length - 1] - minP) / range) * (h - 2 * pad);
+                    const trendColor = row.delta > 5 ? '#ef4444' : (row.delta < -5 ? '#22c55e' : '#9ca3af');
+                    return `<tr>
+                        <td>${row.keyword}</td>
+                        <td><span style="color:#9ca3af;">${row.region}</span></td>
+                        <td>${row.best}</td>
+                        <td>${row.worst}</td>
+                        <td>${row.avg}</td>
+                        <td style="color:${trendColor};font-weight:600;">${row.delta > 0 ? '+' : ''}${row.delta}</td>
+                        <td><svg width="${w}" height="${h}" style="vertical-align:middle;">
+                            <polyline points="${points}" fill="none" stroke="${trendColor}" stroke-width="1.5"/>
+                            <circle cx="${(w - 2 * pad).toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.5" fill="${trendColor}"/>
+                        </svg></td>
+                    </tr>`;
+                }).join('');
+            }
+
+            async function loadConfig() {
+                const r = await fetch(API + '/api/config-status');
+                const s = await r.json();
+                const labels = {
+                    yandex_oauth:       'Yandex OAuth (Webmaster/Metrika)',
+                    yandex_cloud_token: 'Yandex Cloud Token (Search API)',
+                    yandex_folder_id:   'Yandex Folder ID',
+                    yandex_host_id:     'Yandex Host ID (Webmaster)',
+                    google_creds_file:  'Google service account (GSC)',
+                    telegram_bot:       'Telegram Bot Token',
+                    telegram_chat:      'Telegram Chat ID',
+                    database:           'PostgreSQL',
+                    app_secret:         'APP_SECRET_KEY',
+                    keywords_loaded:    'Ключевых слов загружено',
+                };
+                const el = document.getElementById('config-status');
+                el.innerHTML = Object.keys(labels).map(k => {
+                    let v = s[k];
+                    if (k === 'keywords_loaded') return '<div>📚 ' + labels[k] + ': <b>' + v + '</b></div>';
+                    const ok = !!v;
+                    const emoji = ok ? '✅' : '❌';
+                    const color = ok ? '#22c55e' : '#ef4444';
+                    return '<div style="color:' + color + ';">' + emoji + ' ' + labels[k] + '</div>';
+                }).join('');
+            }
+
+            loadData();
+            loadHistory();
+            loadConfig();
+            setInterval(loadData, 300000); // 5 min
+            setInterval(loadHistory, 300000); // 5 min
+            setInterval(loadConfig, 60000); // 1 min
+        </script>
+    </body>
+    </html>
+    

@@ -29,6 +29,8 @@ YANDEX_OAUTH_TOKEN: str = _env("YANDEX_OAUTH_TOKEN")
 YANDEX_CLOUD_TOKEN: str = _env("YANDEX_CLOUD_TOKEN")
 YANDEX_FOLDER_ID: str = _env("YANDEX_FOLDER_ID")
 YANDEX_HOST_ID: str = _env("YANDEX_HOST_ID")
+# Yandex Webmaster v4 требует user_id в пути. Можно задать вручную или автодетект через /info.
+YANDEX_USER_ID: str = _env("YANDEX_USER_ID", "")
 
 YANDEX_REGION_WM_MOSCOW: int = _env_int("YANDEX_REGION_WEBMASTER_MOSCOW", 1)
 YANDEX_REGION_WM_SPB: int = _env_int("YANDEX_REGION_WEBMASTER_SPB", 10174)
@@ -103,6 +105,7 @@ class AppConfig:
     yandex_cloud: str = YANDEX_CLOUD_TOKEN
     yandex_folder: str = YANDEX_FOLDER_ID
     yandex_host: str = YANDEX_HOST_ID
+    yandex_user_id: str = YANDEX_USER_ID
     yandex_regions: YandexRegions = field(default_factory=YandexRegions)
     gsc_credentials: str = GOOGLE_APPLICATION_CREDENTIALS
     gsc_site_url: str = GSC_SITE_URL

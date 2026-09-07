@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 YANDEX_WEBMASTER_API = "https://api.webmaster.yandex.net/v4"
 YANDEX_METRIKA_API = "https://api-metrika.yandex.net/stat/v1"
 YANDEX_SEARCH_API = "https://api.search.yandex.net/v4"
+YANDEX_OAUTH_INFO = "https://login.yandex.ru/info?format=json"
 
 
 # ══════════════════════════════════════════════════════════
@@ -159,13 +160,38 @@ class YandexWebmasterClient:
     Документация: https://yandex.ru/dev/webmaster/doc/ru/
     """
 
-    def __init__(self, oauth_token: str, host_id: str):
+    def __init__(self, oauth_token: str, host_id: str, user_id: str = ""):
         self.token = oauth_token
         self.host_id = host_id
+        # Webmaster v4 требует /user/{user_id}/hosts/... — узнаём через /info, если не задан
+        self.user_id = user_id or self._discover_user_id()
         self.headers = {
             "Authorization": f"OAuth {oauth_token}",
             "Content-Type": "application/json",
         }
+
+    def _discover_user_id(self) -> str:
+        """Получает user_id через Yandex OAuth /info."""
+        try:
+            r = httpx.get(
+                YANDEX_OAUTH_INFO,
+                headers={"Authorization": f"OAuth {self.token}"},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                uid = str(r.json().get("id", ""))
+                if uid:
+                    logger.info(f"Webmaster: discovered user_id={uid} from OAuth token")
+                    return uid
+        except Exception as e:
+            logger.error(f"Webmaster: failed to discover user_id: {e}")
+        return ""
+
+    def _base(self) -> str:
+        """Базовый URL с user_id. Если не получилось — фолбэк на /hosts/ (вернёт 404)."""
+        if self.user_id:
+            return f"{YANDEX_WEBMASTER_API}/user/{self.user_id}/hosts/{self.host_id}"
+        return f"{YANDEX_WEBMASTER_API}/hosts/{self.host_id}"
 
     def get_query_analytics(
         self,
@@ -181,7 +207,7 @@ class YandexWebmasterClient:
         if query_indicators is None:
             query_indicators = ["TOTAL_ENTRIES_FIELD", "TOTAL_CLICKS_FIELD", "TOTAL_SHOWS_FIELD", "AVERAGE_POSITION_FIELD"]
 
-        url = f"{YANDEX_WEBMASTER_API}/hosts/{self.host_id}/query-analytics/int32"
+        url = f"{self._base()}/query-analytics/int32"
 
         payload = {
             "dateFrom": date_from.isoformat(),
@@ -189,6 +215,7 @@ class YandexWebmasterClient:
             "queriedFor": {
                 "query_indicators": query_indicators,
             },
+            "region_id": region_id,
             "aggregationType": "day",
         }
 
@@ -211,7 +238,7 @@ class YandexWebmasterClient:
         """
         Статистика по страницам — какие URL получали показы.
         """
-        url = f"{YANDEX_WEBMASTER_API}/hosts/{self.host_id}/pages-summary"
+        url = f"{self._base()}/pages-summary"
         params = {
             "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
@@ -230,7 +257,7 @@ class YandexWebmasterClient:
 
     def get_index_status(self) -> dict:
         """Проверяет статус индексации сайта."""
-        url = f"{YANDEX_WEBMASTER_API}/hosts/{self.host_id}/summary"
+        url = f"{self._base()}/summary"
         try:
             resp = httpx.get(url, headers=self.headers, timeout=30.0)
             if resp.status_code == 200:
@@ -381,21 +408,28 @@ def run_daily_collection(
                 client = YandexWebmasterClient(
                     oauth_token=cfg.yandex_oauth,
                     host_id=cfg.yandex_host,
+                    user_id=cfg.yandex_user_id,
                 )
                 # Получаем данные за вчера и неделю
                 queries = client.get_query_analytics(yesterday, yesterday, region_id)
                 for q in queries:
-                    keyword = q.get("query", "")
+                    keyword = q.get("query_text") or q.get("query", "")
                     if not keyword:
                         continue
+                    # v4: индикаторы лежат в q["indicators"]
+                    indicators = q.get("indicators", {}) or {}
+                    shows = int(indicators.get("TOTAL_SHOWS_FIELD", 0) or 0)
+                    clicks = int(indicators.get("TOTAL_CLICKS_FIELD", 0) or 0)
+                    avg_pos = indicators.get("AVERAGE_POSITION_FIELD")
+                    ctr = (clicks / shows) if shows > 0 else 0.0
                     kid = get_or_create_keyword(db, keyword, region_name, "webmaster")
                     pos = Position(
                         keyword_id=kid,
                         date=datetime.combine(date_, datetime.min.time(), tzinfo=timezone.utc),
-                        position=q.get("position"),
-                        impressions=q.get("shows", 0),
-                        clicks=q.get("clicks", 0),
-                        ctr=q.get("ctr", 0.0),
+                        position=avg_pos,
+                        impressions=shows,
+                        clicks=clicks,
+                        ctr=ctr,
                         source="webmaster",
                         region=region_name,
                     )

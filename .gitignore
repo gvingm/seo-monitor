@@ -41,3 +41,22 @@ build/
 creds/
 *.json
 !requirements.txt
+
+# Ad-hoc debug / probe / verify scripts (not part of the app)
+test_*.py
+probe*.py
+verify_*.py
+final_*.py
+debug_*.py
+inspect_*.py
+check_*.py
+cleanup.py
+deploy_*.py
+snapshot.py
+save_dashboard.py
+fix_env.py
+
+# Local snapshots / preview / sample
+dashboard_preview.html
+sample_report.md
+api_snapshot.json
