@@ -47,67 +47,76 @@ class YandexSearchClient:
         self,
         keywords: list[str],
         region_id: int = 213,
+        max_concurrent: int = 8,
     ) -> list[dict]:
         """
-        Получает позиции для списка keywords.
-        Yandex Search API отдаёт только XML-snippets — реальные позиции считаем
-        по порядку появления домена в выдаче.
+        Получает позиции для списка keywords параллельно (max_concurrent запросов).
+        Yandex Search API возвращает XML в поле rawData — парсим и ищем наш домен.
 
         Returns: [{keyword, position, url, title, snippet}, ...]
         """
+        import concurrent.futures
         results = []
         domain = "didalsk.ru"
 
-        for keyword in keywords:
+        def fetch_one(keyword: str) -> dict:
+            payload = {
+                "query": {
+                    "search_type": "SEARCH_TYPE_RU",
+                    "query_text": keyword,
+                    "family": "default",
+                },
+                "folderId": self.folder_id,
+            }
+            url = f"{self.base_url}?folderId={self.folder_id}"
             try:
-                # Yandex Cloud Search API v2 body format
-                payload = {
-                    "query": {
-                        "search_type": "SEARCH_TYPE_RU",
-                        "query_text": keyword,
-                        "family": "default",
-                    },
-                    "folderId": self.folder_id,
-                }
-                # folderId в URL params (тоже дублируем — некоторые регионы его требуют)
-                url = f"{self.base_url}?folderId={self.folder_id}"
-
                 resp = httpx.post(
                     url,
                     headers=self.headers,
                     json=payload,
                     timeout=30.0,
                 )
-
                 if resp.status_code == 200:
                     data = resp.json()
-                    # Ищем позицию нашего домена в выдаче
-                    results.append({
+                    return {
                         "keyword": keyword,
                         "data": data,
                         "domain": domain,
                         "position": self._find_domain_position(data, domain),
-                    })
+                    }
                 elif resp.status_code == 429:
-                    logger.warning(f"Rate limited, waiting 60s: {keyword}")
-                    time.sleep(60)
-                    # Retry once
-                    resp = httpx.post(url, headers=self.headers, json=payload, timeout=30.0)
-                    if resp.status_code == 200:
-                        results.append({
-                            "keyword": keyword,
-                            "data": resp.json(),
-                            "domain": domain,
-                            "position": self._find_domain_position(resp.json(), domain),
-                        })
+                    return {
+                        "keyword": keyword,
+                        "error": "rate_limited",
+                        "data": None,
+                        "position": None,
+                    }
                 else:
-                    logger.error(f"Search API error {resp.status_code}: {resp.text[:200]}")
-
-                time.sleep(0.3)  # Rate limiting
-
+                    logger.error(f"Search API error {resp.status_code} for '{keyword}': {resp.text[:200]}")
+                    return {
+                        "keyword": keyword,
+                        "error": f"http_{resp.status_code}",
+                        "data": None,
+                        "position": None,
+                    }
             except Exception as e:
                 logger.error(f"Search API exception for '{keyword}': {e}")
+                return {
+                    "keyword": keyword,
+                    "error": str(e)[:100],
+                    "data": None,
+                    "position": None,
+                }
 
+        # Параллельно, чтобы уложиться в разумное время
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as ex:
+            futures = {ex.submit(fetch_one, kw): kw for kw in keywords}
+            for fut in concurrent.futures.as_completed(futures):
+                results.append(fut.result())
+
+        # Сохраняем порядок (as_completed меняет)
+        order = {kw: i for i, kw in enumerate(keywords)}
+        results.sort(key=lambda r: order.get(r["keyword"], 0))
         return results
 
     @staticmethod
