@@ -84,7 +84,7 @@ app.add_middleware(
 )
 
 # ── Pydantic models ──────────────────────────────────────────
-class RunCollectionResponse(BaseModel)
+class RunCollectionResponse(BaseModel):
     class Config:
         from_attributes = True
 
