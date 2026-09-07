@@ -463,9 +463,13 @@ async def markdown_report(days: int = 7):
         for (kw, region), positions in sorted(grouped.items(), key=lambda x: x[0][0]):
             if not positions:
                 continue
-            best = min(positions)
-            worst = max(positions)
-            avg_p = sum(positions) / len(positions)
+            # filter None (когда домен не найден в топ-50)
+            nums = [p for p in positions if p is not None]
+            if not nums:
+                continue
+            best = min(nums)
+            worst = max(nums)
+            avg_p = sum(nums) / len(nums)
             lines.append(f"- **{kw}** ({region}): avg {avg_p:.1f}, лучшая {best:.0f}, худшая {worst:.0f}")
 
         lines += [
