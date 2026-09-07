@@ -25,6 +25,7 @@ import config
 from alerts import build_markdown_report, build_monitor_report, check_alerts
 from db import (
     Alert,
+    Keyword,
     MonitorLog,
     Position,
     get_db,
@@ -327,7 +328,75 @@ async def seed_demo():
                     db.add(p)
                     rows += 1
         db.commit()
-        return {"status": "ok", "rows_added": rows, "keywords": len(kw_ids)}
+
+        # Создаём несколько демо-алертов на основе искусственных падений
+        from db import Alert
+        sample_alerts = [
+            ("position_drop_daily", "critical",
+             "«дноуглубительный флот» упал с 5 на 32 за сутки (−27)", "дноуглубительный флот"),
+            ("position_drop_weekly", "warning",
+             "«аренда земснаряда» потеряла 18 позиций за неделю", "аренда земснаряда"),
+            ("ctr_drop_pct", "info",
+             "CTR «дноуглубление» снизился на 35% при стабильной позиции", "дноуглубление"),
+        ]
+        for atype, sev, msg, kw in sample_alerts:
+            db.add(Alert(
+                alert_type=atype,
+                severity=sev,
+                message=msg,
+                keyword=kw,
+                region="all",
+                date=today,
+                resolved=0,
+                created_at=datetime.now(timezone.utc),
+            ))
+        db.commit()
+
+        return {"status": "ok", "rows_added": rows, "keywords": len(kw_ids),
+                "alerts_added": len(sample_alerts)}
+    finally:
+        db.close()
+
+
+# ── Позиции по ключам (для таблицы + sparkline) ──────────────
+@app.get("/api/positions-history")
+async def positions_history(days: int = 7):
+    """История позиций по ключам и регионам, для sparkline-таблицы."""
+    from sqlalchemy import func
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        rows = (
+            db.query(Position)
+            .filter(Position.date >= since)
+            .order_by(Position.date.asc())
+            .all()
+        )
+        # Группируем: {(keyword, region): [pos1, pos2, ...]}
+        grouped: dict = {}
+        for r in rows:
+            k = (r.keyword or (db.query(Keyword).get(r.keyword_id).keyword if r.keyword_id else "?"), r.region)
+            grouped.setdefault(k, []).append({
+                "date": r.date.date().isoformat(),
+                "position": r.position,
+                "impressions": r.impressions,
+                "clicks": r.clicks,
+            })
+        result = []
+        for (kw, region), series in grouped.items():
+            positions = [p["position"] for p in series if p["position"] is not None]
+            result.append({
+                "keyword": kw,
+                "region": region,
+                "series": series,
+                "best": min(positions) if positions else None,
+                "worst": max(positions) if positions else None,
+                "avg": round(sum(positions) / len(positions), 1) if positions else None,
+                "delta": round(positions[-1] - positions[0], 1) if len(positions) >= 2 else 0,
+            })
+        result.sort(key=lambda r: (r["region"], r["avg"] or 999))
+        return {"items": result, "total_keywords": len(result)}
     finally:
         db.close()
 
@@ -414,6 +483,24 @@ async def dashboard():
             </table>
         </div>
 
+        <div class="card" style="margin-top: 24px;">
+            <h2>История позиций по ключам (sparkline)</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Ключ</th>
+                        <th>Регион</th>
+                        <th>Лучшая</th>
+                        <th>Худшая</th>
+                        <th>Средняя</th>
+                        <th>Δ за 7д</th>
+                        <th>Тренд</th>
+                    </tr>
+                </thead>
+                <tbody id="history-table"></tbody>
+            </table>
+        </div>
+
         <script>
             const API = '';
 
@@ -466,6 +553,52 @@ async def dashboard():
                 loadData();
             }
 
+            async function loadHistory() {
+                const r = await fetch(API + '/api/positions-history?days=7');
+                const data = await r.json();
+                const tbody = document.getElementById('history-table');
+                tbody.innerHTML = data.items.map(row => {
+                    // Inline SVG sparkline
+                    const series = row.series || [];
+                    const w = 120, h = 30, pad = 2;
+                    const xs = series.length;
+                    const positions = series.map(p => p.position).filter(p => p != null);
+                    if (positions.length < 2) {
+                        return `<tr>
+                            <td>${row.keyword}</td>
+                            <td>${row.region}</td>
+                            <td>${row.best ?? '—'}</td>
+                            <td>${row.worst ?? '—'}</td>
+                            <td>${row.avg ?? '—'}</td>
+                            <td>${row.delta > 0 ? '+' : ''}${row.delta}</td>
+                            <td><svg width="${w}" height="${h}"><text x="5" y="20" fill="#6b7280" font-size="10">нет данных</text></svg></td>
+                        </tr>`;
+                    }
+                    const minP = Math.min(...positions);
+                    const maxP = Math.max(...positions);
+                    const range = Math.max(maxP - minP, 1);
+                    const points = series.map((p, i) => {
+                        const x = pad + (i / Math.max(xs - 1, 1)) * (w - 2 * pad);
+                        const y = pad + (1 - (p.position - minP) / range) * (h - 2 * pad);
+                        return `${x.toFixed(1)},${y.toFixed(1)}`;
+                    }).join(' ');
+                    const lastY = pad + (1 - (positions[positions.length - 1] - minP) / range) * (h - 2 * pad);
+                    const trendColor = row.delta > 5 ? '#ef4444' : (row.delta < -5 ? '#22c55e' : '#9ca3af');
+                    return `<tr>
+                        <td>${row.keyword}</td>
+                        <td><span style="color:#9ca3af;">${row.region}</span></td>
+                        <td>${row.best}</td>
+                        <td>${row.worst}</td>
+                        <td>${row.avg}</td>
+                        <td style="color:${trendColor};font-weight:600;">${row.delta > 0 ? '+' : ''}${row.delta}</td>
+                        <td><svg width="${w}" height="${h}" style="vertical-align:middle;">
+                            <polyline points="${points}" fill="none" stroke="${trendColor}" stroke-width="1.5"/>
+                            <circle cx="${(w - 2 * pad).toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.5" fill="${trendColor}"/>
+                        </svg></td>
+                    </tr>`;
+                }).join('');
+            }
+
             async function loadConfig() {
                 const r = await fetch(API + '/api/config-status');
                 const s = await r.json();
@@ -493,8 +626,10 @@ async def dashboard():
             }
 
             loadData();
+            loadHistory();
             loadConfig();
             setInterval(loadData, 300000); // 5 min
+            setInterval(loadHistory, 300000); // 5 min
             setInterval(loadConfig, 60000); // 1 min
         </script>
     </body>
