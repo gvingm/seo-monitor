@@ -241,7 +241,7 @@ class YandexWebmasterClient:
             "query_indicators": query_indicators,
             "region_id": str(region_id),
             "aggregationType": "day",
-            "limit": 5000,
+            "limit": 500,
         }
 
         try:
