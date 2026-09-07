@@ -144,10 +144,10 @@ async def collect_now(date_str: str | None = None):
 
     try:
         # Yandex (Search + Webmaster)
-        result = run_daily_collection(db, config, date_)
+        result = run_daily_collection(db, config.AppConfig(), date_)
 
         # Google GSC
-        gsc = run_google_collection(db, config, date_)
+        gsc = run_google_collection(db, config.AppConfig(), date_)
 
         # Проверка алертов
         new_alerts = check_alerts(db, date_)
@@ -749,8 +749,8 @@ async def daily_monitor_task():
 
     try:
         # 1. Сбор данных
-        result = run_daily_collection(db, config, date_)
-        gsc = run_google_collection(db, config, date_)
+        result = run_daily_collection(db, config.AppConfig(), date_)
+        gsc = run_google_collection(db, config.AppConfig(), date_)
 
         # 2. Алерты
         new_alerts = check_alerts(db, date_)
