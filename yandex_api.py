@@ -36,7 +36,8 @@ class YandexSearchClient:
     def __init__(self, folder_id: str, iam_token: str):
         self.folder_id = folder_id
         self.iam_token = iam_token
-        self.base_url = "https://api-search.cloud.yandex.net/search/b2b"
+        # Yandex Cloud Search API v2 — sync endpoint
+        self.base_url = "https://searchapi.api.cloud.yandex.net/v2/web/searchSync"
         self.headers = {
             "Authorization": f"Bearer {iam_token}",
             "Content-Type": "application/json",
@@ -59,16 +60,20 @@ class YandexSearchClient:
 
         for keyword in keywords:
             try:
-                # Запрос к Search API
+                # Yandex Cloud Search API v2 payload
                 payload = {
-                    "text": keyword,
-                    "maxpassages": 0,
-                    "filter": {
-                        "max-title-length": 140,
+                    "query": {
+                        "query": keyword,
+                        "searchType": "SEARCH_TYPE_RU",
+                        "family": "default",
                     },
+                    "sortSpec": {"sortMode": "BY_RANK"},
+                    "groupSpec": {"groupMode": "GROUP_MODE_FLAT"},
+                    "maxPassages": 0,
+                    "region": "ru",
                 }
-                # regional_id в URL params
-                url = f"{self.base_url}?folderId={self.folder_id}&region_id={region_id}"
+                # folderId в URL params
+                url = f"{self.base_url}?folderId={self.folder_id}&lr={region_id}"
 
                 resp = httpx.post(
                     url,
@@ -311,11 +316,9 @@ def run_daily_collection(
     }
 
     # --- 1. Yandex Search API (позиции) ---
-    # Search API v2 требует Yandex Cloud Service Account с правом search-api:invoke.
-    # AI Studio API-ключ (AQVN...) сюда НЕ подходит — нужна отдельная сущность.
-    # Если cfg.yandex_cloud выглядит как AI Studio ключ — пропускаем Search API молча.
-    is_cloud_sa = cfg.yandex_cloud and not cfg.yandex_cloud.startswith("AQVN")
-    if is_cloud_sa and cfg.yandex_folder:
+    # Search API v2 требует Yandex Cloud Service Account с правом search-api.webSearch.user
+    # и API-ключ этого SA (формат AQVN...). Пускаем если задан и ключ, и folder.
+    if cfg.yandex_cloud and cfg.yandex_folder:
         for region_name, region_id in [
             ("moscow", cfg.yandex_regions.search_moscow),
             ("spb", cfg.yandex_regions.search_spb),
@@ -347,7 +350,7 @@ def run_daily_collection(
                 logger.error(f"Search API error ({region_name}): {e}")
                 collected["errors"].append(f"search_api_{region_name}: {e}")
     else:
-        logger.info("Search API skipped: AI Studio key detected (need Cloud Service Account for Search API)")
+        logger.info("Search API skipped: no token or folder")
 
     # --- 2. Yandex Webmaster (показы, клики) ---
     if cfg.yandex_oauth and cfg.yandex_host:
