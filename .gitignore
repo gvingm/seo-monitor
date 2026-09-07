@@ -1,0 +1,43 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment
+.env
+
+# Logs
+*.log
+logs/
+err.log
+out.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Database (SQLite local dev)
+*.db
+*.sqlite
+*.sqlite3
+
+# Local credentials
+creds/
+*.json
+!requirements.txt

@@ -1,0 +1,31 @@
+# seo-monitor — dependencies
+# Python 3.13
+
+# Web framework + scheduler
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+apscheduler>=3.11.0
+
+# Database
+sqlalchemy>=2.0.36
+psycopg2-binary>=2.9.10
+
+# HTTP client
+httpx>=0.28.1
+
+# Google API
+google-auth>=2.37.0
+google-auth-oauthlib>=1.2.1
+google-auth-httplib2>=0.2.0
+google-api-python-client>=2.149.0
+
+# Yandex
+# (используем httpx — стандартный клиент без зависимостей)
+
+# Configuration
+python-dotenv>=1.0.1
+
+# Utilities
+python-dateutil>=2.9.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
