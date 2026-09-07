@@ -792,6 +792,8 @@ async def dashboard():
             .card h2 { font-size: 14px; color: #9ca3af; text-transform: uppercase;
                        letter-spacing: 0.05em; margin-bottom: 12px; }
             .metric { font-size: 36px; font-weight: 700; color: #f9fafb; }
+            .metric.loading { color: #6b7280; animation: pulse 1.5s ease-in-out infinite; }
+            @keyframes pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
             .metric-label { font-size: 13px; color: #6b7280; margin-top: 4px; }
             .btn { display: inline-block; padding: 10px 20px; background: #3b82f6;
                    color: white; border-radius: 8px; text-decoration: none;
@@ -813,19 +815,19 @@ async def dashboard():
         <div class="grid">
             <div class="card">
                 <h2>Статус</h2>
-                <div id="status" class="metric">...</div>
+                <div id="status" class="metric loading">⏳</div>
             </div>
             <div class="card">
                 <h2>Активных алертов</h2>
-                <div id="alerts-count" class="metric">—</div>
+                <div id="alerts-count" class="metric loading">⏳</div>
             </div>
             <div class="card">
                 <h2>Средняя позиция (Москва)</h2>
-                <div id="avg-moscow" class="metric">—</div>
+                <div id="avg-moscow" class="metric loading">⏳</div>
             </div>
             <div class="card">
                 <h2>Средняя позиция (СПб)</h2>
-                <div id="avg-spb" class="metric">—</div>
+                <div id="avg-spb" class="metric loading">⏳</div>
             </div>
         </div>
 
@@ -896,28 +898,35 @@ async def dashboard():
             const API = '';
 
             async function loadData() {
-                const res = await fetch(API + '/api/summary');
-                const data = await res.json();
-                document.getElementById('status').textContent = 'Работает';
-                document.getElementById('status').className = 'metric status-ok';
-                document.getElementById('alerts-count').textContent = data.active_alerts_count || 0;
-                document.getElementById('avg-moscow').textContent =
-                    data.avg_positions?.moscow ? data.avg_positions.moscow.toFixed(1) : '—';
-                document.getElementById('avg-spb').textContent =
-                    data.avg_positions?.spb ? data.avg_positions.spb.toFixed(1) : '—';
+                try {
+                    const res = await fetch(API + '/api/summary');
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const data = await res.json();
+                    document.getElementById('status').textContent = 'Работает';
+                    document.getElementById('status').className = 'metric status-ok';
+                    document.getElementById('alerts-count').textContent = data.active_alerts_count || 0;
+                    document.getElementById('avg-moscow').textContent =
+                        data.avg_positions?.moscow ? data.avg_positions.moscow.toFixed(1) : '—';
+                    document.getElementById('avg-spb').textContent =
+                        data.avg_positions?.spb ? data.avg_positions.spb.toFixed(1) : '—';
 
-                // Alerts table
-                const alertsRes = await fetch(API + '/api/alerts');
-                const alerts = await alertsRes.json();
-                const tbody = document.getElementById('alerts-table');
-                tbody.innerHTML = alerts.map(a => `
-                    <tr>
-                        <td><span class="alert-${a.severity}">${a.alert_type}</span></td>
-                        <td>${a.message}</td>
-                        <td>${a.date ? a.date.slice(0,10) : '—'}</td>
-                        <td><button onclick="resolveAlert(${a.id})">✓</button></td>
-                    </tr>
-                `).join('');
+                    // Alerts table
+                    const alertsRes = await fetch(API + '/api/alerts');
+                    const alerts = await alertsRes.json();
+                    const tbody = document.getElementById('alerts-table');
+                    tbody.innerHTML = alerts.map(a => `
+                        <tr>
+                            <td><span class="alert-${a.severity}">${a.alert_type}</span></td>
+                            <td>${a.message}</td>
+                            <td>${a.date ? a.date.slice(0,10) : '—'}</td>
+                            <td><button onclick="resolveAlert(${a.id})">✓</button></td>
+                        </tr>
+                    `).join('');
+                } catch (e) {
+                    console.error('loadData failed:', e);
+                    document.getElementById('status').textContent = 'Ошибка';
+                    document.getElementById('status').className = 'metric status-err';
+                }
             }
 
             async function runCollection() {
