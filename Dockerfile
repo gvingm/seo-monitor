@@ -31,6 +31,7 @@ WORKDIR /app
 COPY --from=build /deps /deps
 COPY config.py .
 COPY db.py .
+COPY clusters.py .
 COPY yandex_api.py .
 COPY google_api.py .
 COPY alerts.py .
