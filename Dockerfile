@@ -8,6 +8,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
+# Pre-create creds dir in build stage (distroless has no shell)
+RUN mkdir -p /creds && chmod 755 /creds
+
 # ── Runtime stage ──────────────────────────────────────────
 FROM gcr.io/distroless/python3-debian12:nonroot
 
@@ -30,8 +33,8 @@ COPY google_api.py .
 COPY alerts.py .
 COPY main.py .
 
-# credentials directory (mount as volume)
-RUN mkdir -p /app/creds && chmod 755 /app/creds
+# credentials directory (mount as volume, pre-created in build stage)
+COPY --from=build --chown=nonroot:nonroot /creds /app/creds
 
 # nonroot user is already set by distroless image
 USER nonroot
