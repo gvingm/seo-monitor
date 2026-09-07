@@ -43,5 +43,6 @@ USER nonroot
 
 EXPOSE 8788
 
-# distroless has only /usr/bin/python3.11, no `python` symlink
-CMD ["/usr/bin/python3.11", "main.py"]
+# distroless python3-debian12 has python3.11 as default entrypoint
+# just pass the script as CMD — the image's ENTRYPOINT is the python interpreter
+CMD ["main.py"]
