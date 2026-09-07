@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.6
 # ── Build stage ──────────────────────────────────────────────
-FROM python:3.13-slim AS build
+# python:3.11-slim to match runtime distroless python3.11 ABI
+FROM python:3.11-slim AS build
 
 WORKDIR /app
 
@@ -12,6 +13,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 RUN mkdir -p /creds && chmod 755 /creds
 
 # ── Runtime stage ──────────────────────────────────────────
+# gcr.io/distroless/python3-debian12:nonroot ships python3.11
 FROM gcr.io/distroless/python3-debian12:nonroot
 
 # timezone data
@@ -41,4 +43,5 @@ USER nonroot
 
 EXPOSE 8788
 
-CMD ["python", "main.py"]
+# distroless has only /usr/bin/python3.11, no `python` symlink
+CMD ["/usr/bin/python3.11", "main.py"]
