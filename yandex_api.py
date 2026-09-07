@@ -37,7 +37,7 @@ class YandexSearchClient:
         self.folder_id = folder_id
         self.iam_token = iam_token
         # Yandex Cloud Search API v2 — sync endpoint
-        self.base_url = "https://searchapi.api.cloud.yandex.net/v2/web/searchSync"
+        self.base_url = "https://searchapi.api.cloud.yandex.net/v2/web/search"
         self.headers = {
             "Authorization": f"Bearer {iam_token}",
             "Content-Type": "application/json",
@@ -60,20 +60,17 @@ class YandexSearchClient:
 
         for keyword in keywords:
             try:
-                # Yandex Cloud Search API v2 payload
+                # Yandex Cloud Search API v2 body format
                 payload = {
                     "query": {
-                        "query": keyword,
-                        "searchType": "SEARCH_TYPE_RU",
+                        "search_type": "SEARCH_TYPE_RU",
+                        "query_text": keyword,
                         "family": "default",
                     },
-                    "sortSpec": {"sortMode": "BY_RANK"},
-                    "groupSpec": {"groupMode": "GROUP_MODE_FLAT"},
-                    "maxPassages": 0,
-                    "region": "ru",
+                    "folderId": self.folder_id,
                 }
-                # folderId в URL params
-                url = f"{self.base_url}?folderId={self.folder_id}&lr={region_id}"
+                # folderId в URL params (тоже дублируем — некоторые регионы его требуют)
+                url = f"{self.base_url}?folderId={self.folder_id}"
 
                 resp = httpx.post(
                     url,
@@ -115,14 +112,27 @@ class YandexSearchClient:
 
     @staticmethod
     def _find_domain_position(data: dict, domain: str) -> Optional[int]:
-        """Находит порядковый номер нашего домена в выдаче."""
+        """Находит порядковый номер нашего домена в выдаче.
+
+        Yandex Cloud Search API v2 возвращает результат в поле `rawData`
+        как base64-кодированный XML. Парсим XML и ищем наш домен в <url>.
+        """
+        import base64
+        import xml.etree.ElementTree as ET
         try:
-            searchresults = data.get("searchResults", [])
-            for i, item in enumerate(searchresults, start=1):
-                item_url = item.get("url", "")
-                if domain in item_url.lower():
-                    return i
-            return None  # Нет в ТОП-50
+            raw = data.get("rawData")
+            if not raw:
+                return None
+            xml_bytes = base64.b64decode(raw)
+            root = ET.fromstring(xml_bytes)
+            # Ищем все <url> в <grouping> → <group> → <doc> → <url>
+            for pos, url_el in enumerate(root.iter("url"), start=1):
+                url_text = (url_el.text or "").lower()
+                if domain in url_text:
+                    return pos
+                if pos >= 50:
+                    break
+            return None
         except Exception:
             return None
 
