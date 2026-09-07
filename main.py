@@ -254,6 +254,270 @@ async def get_summary(days: int = 7):
         db.close()
 
 
+# ── Кластеры (тематические группы ключей) ────────────────────
+@app.get("/api/clusters")
+async def clusters_summary(days: int = 7):
+    """
+    Возвращает сводку по тематическим кластерам ключей:
+      - keywords_count: сколько ключей в кластере
+      - keywords_with_positions: сколько имеют данные за период
+      - avg_position_this_week / prev_week: средняя позиция за эту и прошлую неделю
+      - delta_pct: процентное изменение (отрицательное = улучшение, ближе к 1 = лучше)
+      - impressions / clicks: суммарно за неделю
+    """
+    import clusters as cl
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        # Берём список кластеров (включая None для неназначенных)
+        all_clusters = cl.list_all_clusters()
+        cluster_ids = [c["id"] for c in all_clusters] + [None]
+
+        result = []
+        for cid in cluster_ids:
+            label = next((c["label"] for c in all_clusters if c["id"] == cid), "Без кластера")
+            emoji = next((c["emoji"] for c in all_clusters if c["id"] == cid), "❔")
+
+            # keywords count
+            kw_count = db.execute(
+                text("SELECT COUNT(*) FROM keywords WHERE cluster IS NOT DISTINCT FROM :c"),
+                {"c": cid}
+            ).scalar() or 0
+
+            if cid is None and kw_count == 0:
+                continue  # не показываем пустой "(no cluster)"
+
+            # Берём все keyword_id кластера
+            kid_rows = db.execute(
+                text("SELECT id FROM keywords WHERE cluster IS NOT DISTINCT FROM :c"),
+                {"c": cid}
+            ).fetchall()
+            kid_ids = [r[0] for r in kid_rows]
+
+            if not kid_ids:
+                result.append({
+                    "id": cid,
+                    "label": label,
+                    "emoji": emoji,
+                    "keywords_count": 0,
+                    "avg_position": None,
+                    "prev_avg_position": None,
+                    "delta_pct": None,
+                    "impressions": 0,
+                    "clicks": 0,
+                    "ctr": 0.0,
+                })
+                continue
+
+            # Запрос одной строкой: средние позиции (эта/прошлая неделя) + impressions/clicks
+            row = db.execute(text("""
+                WITH this_week AS (
+                    SELECT AVG(position) avg, SUM(impressions) imp, SUM(clicks) clk,
+                           SUM(clicks)::float / NULLIF(SUM(impressions), 0) ctr
+                    FROM positions
+                    WHERE keyword_id = ANY(:kids)
+                      AND position IS NOT NULL
+                      AND source = 'webmaster'
+                      AND date >= NOW() - INTERVAL '7 days'
+                ),
+                prev_week AS (
+                    SELECT AVG(position) avg
+                    FROM positions
+                    WHERE keyword_id = ANY(:kids)
+                      AND position IS NOT NULL
+                      AND source = 'webmaster'
+                      AND date >= NOW() - INTERVAL '14 days'
+                      AND date < NOW() - INTERVAL '7 days'
+                )
+                SELECT (SELECT avg FROM this_week) AS avg_now,
+                       (SELECT avg FROM prev_week) AS avg_prev,
+                       (SELECT imp FROM this_week) AS imp,
+                       (SELECT clk FROM this_week) AS clk,
+                       (SELECT ctr FROM this_week) AS ctr
+            """), {"kids": kid_ids}).fetchone()
+
+            avg_now = float(row.avg_now) if row.avg_now is not None else None
+            avg_prev = float(row.avg_prev) if row.avg_prev is not None else None
+            imp = int(row.imp or 0)
+            clk = int(row.clk or 0)
+            ctr = float(row.ctr or 0.0)
+
+            # WoW % (отрицательное = позиция улучшилась, мы выводим число со знаком)
+            # Логика: было 30, стало 25 → улучшение → delta_pct = -16.7% (отрицательное).
+            # Удобно для UI: <0 — зелёная стрелка вверх, >0 — красная вниз.
+            if avg_now is not None and avg_prev not in (None, 0):
+                delta_pct = round((avg_now - avg_prev) / avg_prev * 100, 1)
+            else:
+                delta_pct = None
+
+            result.append({
+                "id": cid,
+                "label": label,
+                "emoji": emoji,
+                "keywords_count": kw_count,
+                "avg_position": round(avg_now, 2) if avg_now is not None else None,
+                "prev_avg_position": round(avg_prev, 2) if avg_prev is not None else None,
+                "delta_pct": delta_pct,
+                "impressions": imp,
+                "clicks": clk,
+                "ctr": round(ctr * 100, 2),  # в процентах
+            })
+
+        return result
+    finally:
+        db.close()
+
+
+# ── SEO-рекомендации (на основе анализа сайта) ────────────────
+@app.get("/api/recommendations", response_class=HTMLResponse)
+async def recommendations():
+    """Возвращает markdown-список рекомендаций по SEO didalsk.ru.
+
+    Данные берутся из БД (через /api/site-audit) + статический список
+    рекомендаций, привязанный к анализу сайта.
+    """
+    db_gen = get_db()
+    db = next(db_gen)
+    try:
+        # Попробуем получить свежие данные аудита (если есть)
+        audit = db.execute(text("""
+            SELECT key, value, updated_at
+            FROM site_audit
+            ORDER BY key
+        """)).fetchall()
+    except Exception:
+        audit = []
+    finally:
+        db.close()
+
+    audit_dict = {r.key: r.value for r in audit}
+
+    lines = [
+        "# 🎯 SEO-рекомендации — didalsk.ru",
+        f"_Сгенерировано {date.today().isoformat()}_",
+        "",
+        "## 🔴 Критические проблемы (высокий приоритет)",
+        "",
+        "### 1. Отсутствует robots.txt",
+        "- **Файл:** `https://didalsk.ru/robots.txt` → 404",
+        "- **Влияние:** Поисковики не получают инструкций по индексации;",
+        "  нельзя явно запретить мусорные страницы (фильтры, теги),",
+        "  не объявлен sitemap.",
+        "- **Решение:** Создать `robots.txt` в корне WP:",
+        "  ```",
+        "  User-agent: *",
+        "  Disallow: /wp-admin/",
+        "  Disallow: /wp-includes/",
+        "  Disallow: /?s=*",
+        "  Disallow: /search/",
+        "  Disallow: /cart/",
+        "  Disallow: /checkout/",
+        "  Disallow: /feed/",
+        "  Allow: /wp-admin/admin-ajax.php",
+        "  Sitemap: https://didalsk.ru/sitemap.xml",
+        "  ```",
+        "",
+        "### 2. Отсутствует sitemap.xml",
+        "- **Файл:** `https://didalsk.ru/sitemap.xml` → 404",
+        "- **Влияние:** Яндекс/Google не имеют карты сайта для эффективного обхода.",
+        "  Новые страницы попадают в индекс медленнее (через перелинковку).",
+        "- **Решение:** Включить XML Sitemap в Yoast SEO:",
+        "  `SEO → Общие → Возможности → XML Sitemap: Вкл.`",
+        "  Или поставить плагин `Google XML Sitemaps` (уже есть Yoast — этого хватит).",
+        "",
+        "### 3. Описание сайта (blogdescription) пустое",
+        "- **Текущее:** `tagline = \"\"`",
+        "- **Влияние:** Title и meta description главной страницы не содержат",
+        "  ключевых слов → хуже ранжирование по коммерческим запросам.",
+        "- **Решение:** В админке WP: `Настройки → Общие → Краткое описание`:",
+        "  > «Подрядчик по дноуглубительным, гидротехническим работам",
+        "  > и аренде спецтехники в СПб и СЗФО. Опыт 20+ лет.»",
+        "  Или прямо в `wp_options` (option_name=`blogdescription`).",
+        "",
+        "## 🟡 Высокий приоритет",
+        "",
+        "### 4. ~84 страниц без meta title/description",
+        f"- **Текущее:** Yoast заполнен для {audit_dict.get('yoast_count', '~67')} страниц,",
+        f"  всего опубликованных: {audit_dict.get('total_published', '~155')}",
+        "  (81 page + 18 project + 21 product + 31 rental + 4 post).",
+        "- **Влияние:** Google сам генерирует сниппет → CTR проседает.",
+        "- **Решение:** Прогнать массово через Yoast → `SEO → Инструменты →",
+        "  Массовое редактирование`. Минимум: уникальный title (50-60 символов)",
+        "  + description (140-160) на каждой странице.",
+        "",
+        "### 5. Только 3 focus keywords в Yoast",
+        "- **Текущее:** `_yoast_wpseo_focuskw` заполнено для 3 страниц из ~155.",
+        "- **Решение:** На страницах категорий и коммерческих — задать focus kw,",
+        "  по которой пишется текст. Это улучшит внутреннюю оптимизацию.",
+        "",
+        "### 6. Всего 2 категории",
+        "- **Текущее:** «Без рубрики» (1 пост), «Экспертные материалы» (3 поста).",
+        "- **Влияние:** Узкая таксономия → нет тематических «хабов» для группировки",
+        "  постов → нет перелинковки через категории → слабый внутренний link juice.",
+        "- **Решение:** Создать 6 категорий по кластерам:",
+        "  Дноуглубление, Берегоукрепление, Дюкеры, Гидротехника,",
+        "  Аренда техники, Маломерный флот. Раскидать проекты и материалы.",
+        "",
+        "## 🟢 Оптимизации (средний приоритет)",
+        "",
+        "### 7. Очистить 880 ревизий",
+        "- **Текущее:** 880 записей в `wp_posts` с типом `revision`.",
+        "- **Решение:** Плагин `WP-Optimize` или SQL:",
+        "  ```sql",
+        "  DELETE a, b FROM wp_posts a LEFT JOIN wp_postmeta b ON a.ID = b.post_id",
+        "  WHERE a.post_type = 'revision';",
+        "  ```",
+        "  Бэкап обязателен. Можно автоматизировать ежедневно.",
+        "",
+        "### 8. WP File Manager Pro — security risk",
+        "- **Плагин:** `wp-file-manager` (папка: `wp-content/uploads/wp-file-manager-pro/`)",
+        "- **Риск:** В 2020-2022 у него была критическая RCE (CVE-2020-25213).",
+        "  Если не обновлён — потенциальная дыра.",
+        "- **Решение:** Обновить до последней версии ИЛИ удалить (для WP есть SFTP).",
+        "",
+        "### 9. Дублирование бэкапов плагинов в /wp-content/",
+        "- **Текущее:** `didalsk-products.bak-20260709-183320`,",
+        "  `didalsk-projects-fixed.bak-20260709-195523`,",
+        "  `didalsk-projects-fixed.bak-20260812`.",
+        "- **Решение:** Удалить старые бэкапы из prod (хранить в /backup/, не в wp-content).",
+        "",
+        "### 10. llms.txt — отлично, но не индексируется поисковиками",
+        "- **Файл:** `/llms.txt` (8.7 KB, обновлён 03.09.2026) — для AI-crawler (GPTBot, ClaudeBot).",
+        "- **Решение:** Уже в порядке. Можно добавить robots.txt правило:",
+        "  ```",
+        "  # AI Crawlers — OK",
+        "  User-agent: GPTBot",
+        "  Allow: /",
+        "  ```",
+        "",
+        "## 📊 Контентная стратегия (на основе кластеров)",
+        "",
+        "На сайте 18 проектов, 21 продукт, 31 аренда. Использовать как",
+        "перелинковку к новым статьям в блоге:",
+        "- Дноуглубление: под каждый проект (Высоцк, Вуокса, Харцизск) — статья в блог",
+        "  с target keyword «дноуглубление [река/порт]».",
+        "- Берегоукрепление: нет ни одного проекта в портфолио. **Срочно**:",
+        "  создать категорию, написать 1-2 статьи (берегоукрепление СПб / Нева).",
+        "- Дюкеры: 2 проекта (Лжа, Северский Донец) — есть что показать.",
+        "- Гидротехника: размытое позиционирование, нужна чёткая посадочная.",
+        "",
+        "## 🔧 Быстрый чек-лист (сегодня)",
+        "",
+        "1. ☐ Создать `robots.txt`",
+        "2. ☐ Включить XML Sitemap в Yoast",
+        "3. ☐ Заполнить `blogdescription`",
+        "4. ☐ Добавить 6 категорий по кластерам",
+        "5. ☐ Удалить .bak папки плагинов",
+        "6. ☐ Проверить обновления `wp-file-manager`",
+        "7. ☐ Массовое заполнение meta title/description (топ-30 по трафику)",
+        "",
+        "---",
+        "_Источник: прямой аудит didalsk.ru (SSH + WP-CLI) + текущее состояние БД._",
+    ]
+    md = "\n".join(lines)
+    return HTMLResponse(content=md, media_type="text/markdown; charset=utf-8")
+
+
 # ── Статус конфигурации (что настроено, что нет) ─────────────
 @app.get("/api/config-status")
 async def config_status():
@@ -450,6 +714,31 @@ async def markdown_report(days: int = 7):
         else:
             lines.append("- _нет значимых колебаний_")
 
+        # ── Сводка по кластерам (WoW %) ──
+        try:
+            cluster_data = await clusters_summary(days=days)
+            if cluster_data:
+                lines += ["", "## 🧩 Сводка по кластерам (WoW %)"]
+                for c in cluster_data:
+                    if c.get("id") is None:
+                        continue  # пропускаем неназначенные
+                    avg = c.get("avg_position")
+                    delta = c.get("delta_pct")
+                    delta_str = ""
+                    if delta is not None:
+                        arrow = "🟢" if delta < 0 else ("🔴" if delta > 0 else "⚪")
+                        delta_str = f"  {arrow} WoW {delta:+.1f}%"
+                    avg_str = f"avg {avg:.1f}" if avg is not None else "нет данных"
+                    imp = c.get("impressions", 0)
+                    clk = c.get("clicks", 0)
+                    lines.append(
+                        f"- {c.get('emoji','')} **{c.get('label',c.get('id'))}** "
+                        f"({c.get('keywords_count',0)} кл.) — {avg_str}{delta_str}, "
+                        f"показы {imp}, клики {clk}"
+                    )
+        except Exception as e:
+            logger.warning(f"cluster summary in report failed: {e}")
+
         lines += ["", f"## 🚨 Активные алерты ({len(alerts)})"]
         if alerts:
             severity_emoji = {"critical": "🔴", "warning": "🟡", "info": "🔵"}
@@ -545,6 +834,24 @@ async def dashboard():
             <button class="btn" onclick="loadData()">↻ Обновить</button>
             <button class="btn" style="background:#7c3aed;" onclick="seedDemo()">🧪 Сид демо-данных</button>
             <button class="btn" style="background:#10b981;" onclick="copyReport()">📄 Копировать отчёт</button>
+            <button class="btn" style="background:#f59e0b;" onclick="openRecommendations()">🎯 SEO-рекомендации</button>
+        </div>
+
+        <div class="card" style="margin-top: 24px;">
+            <h2>🧩 Сводка по кластерам (WoW %)</h2>
+            <div style="font-size:12px;color:#64748b;margin-bottom:8px;">Тематические группы ключей. Зелёная стрелка вверх = улучшение позиций, красная вниз = падение.</div>
+            <div id="clusters-body" style="display: grid; grid-template-columns: 1fr; gap: 6px;">
+                <div class="muted">загрузка...</div>
+            </div>
+            <style>
+                .cluster-row { display: grid; grid-template-columns: 2fr 0.6fr 0.8fr 0.8fr 1.2fr; gap: 8px; padding: 6px 8px; border-bottom: 1px solid #e5e7eb; font-size: 13px; align-items: center; }
+                .cluster-row:last-child { border-bottom: none; }
+                .cluster-name { font-weight: 600; }
+                .cluster-meta { color: #64748b; }
+                .cluster-avg { font-family: monospace; }
+                .cluster-delta { font-family: monospace; font-weight: 600; text-align: right; }
+                .cluster-traffic { color: #64748b; font-size: 12px; }
+            </style>
         </div>
 
         <div class="card" style="margin-top: 24px;">
@@ -728,9 +1035,53 @@ async def dashboard():
             loadData();
             loadHistory();
             loadConfig();
+            loadClusters();
             setInterval(loadData, 300000); // 5 min
             setInterval(loadHistory, 300000); // 5 min
             setInterval(loadConfig, 60000); // 1 min
+            setInterval(loadClusters, 300000); // 5 min
+
+            async function loadClusters() {
+                const r = await fetch(API + '/api/clusters?days=7');
+                const data = await r.json();
+                const el = document.getElementById('clusters-body');
+                if (!data || !data.length) { el.innerHTML = '<div class="muted">нет данных</div>'; return; }
+                el.innerHTML = data.map(c => {
+                    if (!c.id) return '';
+                    const delta = c.delta_pct;
+                    let arrow = '⚪', color = '#999';
+                    if (delta !== null && delta !== undefined) {
+                        if (delta < -2) { arrow = '▲'; color = '#22c55e'; }
+                        else if (delta < 0) { arrow = '↗'; color = '#84cc16'; }
+                        else if (delta > 2) { arrow = '▼'; color = '#ef4444'; }
+                        else if (delta > 0) { arrow = '↘'; color = '#f59e0b'; }
+                    }
+                    const avg = c.avg_position != null ? c.avg_position.toFixed(1) : '—';
+                    const deltaStr = delta !== null ? (delta > 0 ? '+' : '') + delta.toFixed(1) + '%' : '—';
+                    return `
+                        <div class="cluster-row">
+                            <div class="cluster-name">${c.emoji || ''} ${c.label}</div>
+                            <div class="cluster-meta">${c.keywords_count} кл.</div>
+                            <div class="cluster-avg">avg ${avg}</div>
+                            <div class="cluster-delta" style="color:${color};">${arrow} ${deltaStr}</div>
+                            <div class="cluster-traffic">${c.impressions || 0} imp · ${c.clicks || 0} clk</div>
+                        </div>
+                    `;
+                }).join('');
+            }
+
+            async function openRecommendations() {
+                const r = await fetch(API + '/api/recommendations');
+                const md = await r.text();
+                const w = window.open('', '_blank');
+                const safe = md.replace(/</g, '&lt;').replace(/```/g, '').replace(/^# (.+)$/gm, '<h1>$1</h1>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^- (.+)$/gm, '<li>$1</li>').replace(/\n/g, '<br>');
+                w.document.write('<!doctype html><html><head><title>SEO Рекомендации — didalsk.ru</title>'
+                    + '<style>body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#1f2937;}'
+                    + 'h1,h2,h3{color:#0f172a;border-bottom:1px solid #e5e7eb;padding-bottom:8px;margin-top:24px;}'
+                    + 'pre{background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;overflow-x:auto;}'
+                    + 'code{background:#f1f5f9;padding:1px 6px;border-radius:4px;font-size:90%;}'
+                    + '</style></head><body>' + safe + '</body></html>');
+            }
         </script>
     </body>
     </html>

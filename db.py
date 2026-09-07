@@ -44,12 +44,14 @@ class Keyword(Base):
     keyword = Column(String(500), nullable=False, unique=True)
     region = Column(String(50), nullable=False)  # "moscow" | "spb"
     source = Column(String(20), nullable=False)   # "yandex" | "google"
+    cluster = Column(String(50), nullable=True, index=True)  # "дredging" | "shore" | "duct" | "hydro" | "rental" | "fleet" | NULL
     is_active = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         Index("ix_keywords_keyword_region", "keyword", "region", unique=True),
+        Index("ix_keywords_cluster", "cluster"),
     )
 
 
@@ -114,20 +116,30 @@ class MonitorLog(Base):
 
 
 # ── CRUD helpers ───────────────────────────────────────────
-def get_or_create_keyword(db: Session, keyword: str, region: str, source: str = "yandex") -> int:
+def get_or_create_keyword(db: Session, keyword: str, region: str, source: str = "yandex", cluster: Optional[str] = None) -> int:
     """Возвращает id keyword, создаёт если нет.
 
     Модель: один keyword = одна строка (unique на `keyword`).
     Регион хранится в Position, а не в Keyword.
+    Cluster — опциональный тематический кластер (если None — определится автоматически).
     """
+    # Если cluster не передан — попробуем автодетект через ленивый импорт (избегаем цикла)
+    if cluster is None:
+        try:
+            from clusters import detect_cluster
+            cluster = detect_cluster(keyword)
+        except Exception:
+            cluster = None
     row = db.execute(
         text("""
-            INSERT INTO keywords (keyword, region, source, is_active)
-            VALUES (:kw, :reg, :src, 1)
-            ON CONFLICT (keyword) DO UPDATE SET updated_at = NOW()
+            INSERT INTO keywords (keyword, region, source, cluster, is_active)
+            VALUES (:kw, :reg, :src, :clu, 1)
+            ON CONFLICT (keyword) DO UPDATE
+                SET updated_at = NOW(),
+                    cluster = COALESCE(EXCLUDED.cluster, keywords.cluster)
             RETURNING id
         """),
-        {"kw": keyword, "reg": region, "src": source}
+        {"kw": keyword, "reg": region, "src": source, "clu": cluster}
     ).fetchone()
     return row[0]
 
