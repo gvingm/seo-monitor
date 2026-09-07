@@ -344,10 +344,9 @@ async def seed_demo():
                 alert_type=atype,
                 severity=sev,
                 message=msg,
-                keyword=kw,
-                region="all",
+                keyword_id=kw_ids.get(kw),
                 date=today,
-                resolved=0,
+                is_resolved=0,
                 created_at=datetime.now(timezone.utc),
             ))
         db.commit()
@@ -362,26 +361,27 @@ async def seed_demo():
 @app.get("/api/positions-history")
 async def positions_history(days: int = 7):
     """История позиций по ключам и регионам, для sparkline-таблицы."""
-    from sqlalchemy import func
     db_gen = get_db()
     db = next(db_gen)
     try:
         since = datetime.now(timezone.utc) - timedelta(days=days)
+        # Join с Keyword, чтобы сразу получить текст ключевого слова
         rows = (
-            db.query(Position)
+            db.query(Position, Keyword.keyword)
+            .join(Keyword, Position.keyword_id == Keyword.id)
             .filter(Position.date >= since)
             .order_by(Position.date.asc())
             .all()
         )
         # Группируем: {(keyword, region): [pos1, pos2, ...]}
         grouped: dict = {}
-        for r in rows:
-            k = (r.keyword or (db.query(Keyword).get(r.keyword_id).keyword if r.keyword_id else "?"), r.region)
+        for pos, kw_text in rows:
+            k = (kw_text, pos.region)
             grouped.setdefault(k, []).append({
-                "date": r.date.date().isoformat(),
-                "position": r.position,
-                "impressions": r.impressions,
-                "clicks": r.clicks,
+                "date": pos.date.date().isoformat(),
+                "position": pos.position,
+                "impressions": pos.impressions,
+                "clicks": pos.clicks,
             })
         result = []
         for (kw, region), series in grouped.items():
