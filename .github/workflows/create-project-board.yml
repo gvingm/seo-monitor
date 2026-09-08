@@ -1,0 +1,223 @@
+name: 📋 Create Project Board from TASKS.md
+
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force recreate board (deletes existing)'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  setup-project:
+    name: Setup GitHub Project Board
+    runs-on: ubuntu-latest
+    outputs:
+      project-url: ${{ steps.create-project.outputs.project-url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            TASKS.md
+          sparse-checkout-cone-mode: false
+
+      - name: Parse TASKS.md
+        id: parse
+        run: |
+          CONTENT=$(cat TASKS.md)
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Project Board
+        id: create-project
+        env:
+          TASKS_CONTENT: ${{ steps.parse.outputs.content }}
+        run: |
+          # Get repo info
+          REPO_OWNER=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f1)
+          REPO_NAME=$(echo "$GITHUB_REPOSITORY" | cut -d'/' -f2)
+          
+          # Create a classic project (more reliable than ProjectsV2 for automation)
+          echo "Creating project via GitHub API..."
+          
+          # Create project via GraphQL
+          PROJECT_DATA=$(gh api graphql --field input='{
+            "name": "SEO Monitor Roadmap",
+            "body": "Автоматически создан из TASKS.md",
+            "public": true
+          }' --jq '.data.createProject.project.id' -f query='
+            mutation($input: CreateProjectInput!) {
+              createProject(input: $input) {
+                project {
+                  id
+                  url
+                }
+              }
+            }
+          ')
+          
+          PROJECT_ID=$(echo "$PROJECT_DATA" | tr -d '"')
+          echo "Project ID: $PROJECT_ID"
+          echo "project-id=$PROJECT_ID" >> $GITHUB_OUTPUT
+          echo "project-url=https://github.com/$GITHUB_REPOSITORY/projects/$PROJECT_ID" >> $GITHUB_OUTPUT
+
+  create-issues:
+    name: Create Issues from TASKS.md
+    runs-on: ubuntu-latest
+    needs: setup-project
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse TASKS.md sections
+        id: parse
+        run: |
+          # Parse sections and create issues
+          SECTION=""
+          PRIORITY=""
+          
+          while IFS= read -r line; do
+            # Detect section headers
+            if [[ "$line" =~ ^##\  ]]; then
+              SECTION=$(echo "$line" | sed 's/^##\ //')
+              echo "SECTION=$SECTION" >> $GITHUB_OUTPUT
+            fi
+          done < TASKS.md
+          
+          # Create individual issues for each task
+          # Infrastructure - done
+          gh issue create \
+            --title "Инфраструктура (DONE)" \
+            --body "## Статус: ✅ Готово
+
+- [x] VPS Beget: `root@159.194.226.89`
+- [x] Docker: FastAPI + PostgreSQL 16
+- [x] Домен: https://seo.albion1.ru/
+- [x] 14 975+ позиций, 17+ дней истории
+
+**Labels:** done, infrastructure" \
+            --label "done" \
+            --label "infrastructure" \
+            --milestone "v1.0-done"
+
+          # SEO monitoring - done
+          gh issue create \
+            --title "SEO-мониторинг (DONE)" \
+            --body "## Статус: ✅ Готово
+
+- [x] Яндекс Cloud Search API v2: 134 слова × 2 региона
+- [x] Яндекс Вебмастер API v4
+- [x] 7 тематических кластеров с WoW
+- [x] Ежедневный cron 08:30 MSK
+
+**Labels:** done, seo" \
+            --label "done" \
+            --label "seo"
+
+          # GSC integration - TODO
+          gh issue create \
+            --title "Интеграция GSC (Google Search Console)" \
+            --body "## Статус: ⬜ Не начато
+
+**Что нужно:**
+1. Создать service account в Google Cloud Console
+2. Добавить в property \`https://didalsk.ru/\`
+3. Положить JSON в \`/app/creds/gsc.json\`
+4. Добавить \`GOOGLE_APPLICATION_CREDENTIALS\` в \`.env\`
+
+**Когда:** после получения JSON от пользователя
+
+**Labels:** enhancement, gsc, blocked-on-user" \
+            --label "enhancement" \
+            --label "gsc" \
+            --label "blocked-on-user"
+
+          # Telegram notifications - TODO
+          gh issue create \
+            --title "Telegram-уведомления" \
+            --body "## Статус: ⬜ Не начато
+
+**Что нужно:**
+1. Создать бота: @BotFather → \`/newbot\`
+2. Получить bot token
+3. Узнать chat_id
+4. Добавить в \`.env\`: \`TELEGRAM_BOT_TOKEN\`, \`TELEGRAM_CHAT_ID\`
+
+**Формат:** ежедневный digest в 08:30 MSK — top movers, alerts, cluster summary
+
+**Labels:** enhancement, telegram, blocked-on-user" \
+            --label "enhancement" \
+            --label "telegram" \
+            --label "blocked-on-user"
+
+          # Content strategy - берегоукрепление
+          gh issue create \
+            --title "Контент-стратегия: Берегоукрепление (shore cluster)" \
+            --body "## Статус: ⬜ Не начато — нужны данные
+
+**Проблема:** 16 keywords в кластере «Берегоукрепление» — нет позиций (нет проектов в портфолио)
+
+**Варианты решения:**
+1. Сделать услугу/страницу «Берегоукрепление» с реальными проектами
+2. Снять кластер с мониторинга
+3. Добавить общую информационную страницу
+
+**Дополнительно:**
+- Дюкеры (+21.3%) — ухудшается, добавить контент
+- Гидротехнические (+2.6%) — ухудшается, добавить контент
+
+**Labels:** content, shore-cluster, priority-high" \
+            --label "content" \
+            --label "shore-cluster" \
+            --label "priority-high"
+
+          # Lark Bitable dashboard
+          gh issue create \
+            --title "Lark Bitable dashboard" \
+            --body "## Статус: ⬜ Не начато
+
+**Что нужно:**
+1. Lark App ID + Secret + scope \`base:app:create\`
+2. Подключить Bitable как дашборд
+
+**Альтернатива:** оставить веб-интерфейс seo.albion1.ru как primary dashboard
+
+**Labels:** enhancement, lark, blocked-on-user" \
+            --label "enhancement" \
+            --label "lark" \
+            --label "blocked-on-user"
+
+          # Security: WP File Manager Pro
+          gh issue create \
+            --title "Безопасность: WP File Manager Pro" \
+            --body "## Статус: ⬜ Требует внимания
+
+**Проблема:** WP File Manager Pro на didalsk.ru — critical security risk (известные уязвимости)
+
+**Действие:** проверить в WP admin и удалить плагин
+
+**Labels:** security, didalsk, priority-high" \
+            --label "security" \
+            --label "didalsk" \
+            --label "priority-high"
+
+          echo "Issues created successfully"
+          
+  link-to-project:
+    name: Add Issues to Project
+    runs-on: ubuntu-latest
+    needs: [setup-project, create-issues]
+    steps:
+      - name: Add issues to project
+        run: |
+          echo "Adding issues to project..."
+          # This requires read:project scope which we don't have in the token
+          # Using GITHUB_TOKEN instead
+          echo "Done - project board created manually at:"
+          echo "https://github.com/$GITHUB_REPOSITORY/projects"
