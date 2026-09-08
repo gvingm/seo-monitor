@@ -1083,7 +1083,7 @@ async def dashboard():
                 const r = await fetch(API + '/api/recommendations');
                 const md = await r.text();
                 const w = window.open('', '_blank');
-                const safe = md.replace(/</g, '&lt;').replace(/```/g, '').replace(/^# (.+)$/gm, '<h1>$1</h1>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^- (.+)$/gm, '<li>$1</li>').replace(/\n/g, '<br>');
+                const safe = md.replace(/</g, '&lt;').replace(/```/g, '').replace(/^# (.+)$/gm, '<h1>$1</h1>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^- (.+)$/gm, '<li>$1</li>').replace(/\\n/g, '<br>');
                 w.document.write('<!doctype html><html><head><title>SEO Рекомендации — didalsk.ru</title>'
                     + '<style>body{font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:900px;margin:30px auto;padding:0 20px;color:#1f2937;}'
                     + 'h1,h2,h3{color:#0f172a;border-bottom:1px solid #e5e7eb;padding-bottom:8px;margin-top:24px;}'
