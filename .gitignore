@@ -55,8 +55,31 @@ deploy_*.py
 snapshot.py
 save_dashboard.py
 fix_env.py
+_analyze_*.py
+_analyze_didalsk*.py
+_db_check.py
+db_check.py
+_check_issues.py
+_fix_*.py
+_ping*.py
+_setup_*.py
+_start_*.py
+_update_*.py
+_snap_*.py
+_create_*.py
+_show_*.py
+start_*.py
+ping*.py
+analyze_didalsk*.py
+snap_final.py
+read_dokploy_log.py
+setup_caddy_seo.py
+setup_seo_caddyfile.py
+update_caddyfile.py
+fix_proxy.py
 
 # Local snapshots / preview / sample
 dashboard_preview.html
 sample_report.md
 api_snapshot.json
+snapshots/
