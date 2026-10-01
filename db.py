@@ -44,7 +44,7 @@ class Keyword(Base):
     keyword = Column(String(500), nullable=False, unique=True)
     region = Column(String(50), nullable=False)  # "moscow" | "spb"
     source = Column(String(20), nullable=False)   # "yandex" | "google"
-    cluster = Column(String(50), nullable=True, index=True)  # "дredging" | "shore" | "duct" | "hydro" | "rental" | "fleet" | NULL
+    cluster = Column(String(50), nullable=True)  # "дredging" | "shore" | "duct" | "hydro" | "rental" | "fleet" | NULL
     is_active = Column(Integer, default=1)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))

@@ -9,6 +9,8 @@ apscheduler>=3.11.0
 # Database
 sqlalchemy>=2.0.36
 psycopg2-binary>=2.9.10
+# SQLAlchemy 2.x resolves the psycopg (v3) driver for postgresql:// URLs by default
+psycopg[binary]>=3.2.0
 
 # HTTP client
 httpx>=0.28.1
